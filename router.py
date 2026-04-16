@@ -11,8 +11,21 @@ PORT = 5000
 routing_table = {}
 
 def broadcast_updates():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
     while True:
-        print(f"[{MY_IP}] Broadcasting routing table...")
+        message = {
+            "router_id": MY_IP,
+            "message": f"Hello from {MY_IP}"
+        }
+
+        data = json.dumps(message).encode()
+
+        for neighbor in NEIGHBORS:
+            if neighbor:
+                sock.sendto(data, (neighbor, PORT))
+                print(f"[{MY_IP}] Sent message to {neighbor}")
+
         time.sleep(5)
 
 def listen_for_updates():
