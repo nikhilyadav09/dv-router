@@ -18,21 +18,12 @@ def broadcast_updates():
 def listen_for_updates():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((MY_IP, PORT))
-    print(f"[{MY_IP}] Listening on {PORT}")
+
+    print(f"[{MY_IP}] Listening for updates...")
 
     while True:
-        data, addr = sock.recvfrom(4096)
-        message = json.loads(data.decode())
-
-        neighbor_ip = message.get("router_id")
-        routes = message.get("routes", [])
-
-        print(f"[{MY_IP}] Received update from {neighbor_ip}")
-        update_logic(neighbor_ip, routes)
-
-def update_logic(neighbor_ip, routes):
-    print(f"[{MY_IP}] Processing routes from {neighbor_ip}")
-    pass
+        data, addr = sock.recvfrom(1024)
+        print(f"Received from {addr}: {data}")
 
 if __name__ == "__main__":
     threading.Thread(target=broadcast_updates, daemon=True).start()
