@@ -23,14 +23,21 @@ def update_logic(neighbor_ip, routes_from_neighbor):
 
         new_distance = neighbor_distance + 1
 
+        # Case 1: New subnet → add
         if subnet not in routing_table:
             routing_table[subnet] = [new_distance, neighbor_ip]
             updated = True
 
         else:
-            current_distance = routing_table[subnet][0]
+            current_distance, current_hop = routing_table[subnet]
 
+            # Case 2: Better path → update
             if new_distance < current_distance:
+                routing_table[subnet] = [new_distance, neighbor_ip]
+                updated = True
+
+            # Case 3: Same neighbor → update distance (important!)
+            elif current_hop == neighbor_ip and new_distance != current_distance:
                 routing_table[subnet] = [new_distance, neighbor_ip]
                 updated = True
 
@@ -68,7 +75,7 @@ def broadcast_updates():
 
 def listen_for_updates():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((MY_IP, PORT))
+    sock.bind(("0.0.0.0", PORT))
 
     print(f"[{MY_IP}] Listening for updates...")
 
