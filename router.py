@@ -4,6 +4,9 @@ import threading
 import time
 import os
 
+# ENABLE FORWARDING (IMPORTANT)
+os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
+
 MY_IP = os.getenv("MY_IP", "127.0.0.1")
 NEIGHBORS = os.getenv("NEIGHBORS", "").split(",")
 PORT = 5000
@@ -13,6 +16,18 @@ MY_SUBNET = os.getenv("MY_SUBNET", "10.0.1.0/24")
 routing_table = {
     MY_SUBNET: [0, "0.0.0.0"]
 }
+def add_direct_routes():
+    for neighbor in NEIGHBORS:
+        if neighbor:
+            subnet = neighbor.rsplit(".", 1)[0] + ".0/24"
+            routing_table[subnet] = [1, neighbor]
+
+def is_direct_neighbor(ip):
+    return ip in NEIGHBORS
+
+def is_direct_neighbor(ip):
+    return ip in NEIGHBORS
+
 
 def update_logic(neighbor_ip, routes_from_neighbor):
     updated = False
@@ -21,31 +36,46 @@ def update_logic(neighbor_ip, routes_from_neighbor):
         subnet = route["subnet"]
         neighbor_distance = route["distance"]
 
-        new_distance = neighbor_distance + 1
+        if subnet == MY_SUBNET:
+            continue
 
-        # Case 1: New subnet → add
+        # Direct neighbor → always 1 hop
+        if is_direct_neighbor(neighbor_ip):
+            new_distance = 1
+        else:
+            new_distance = neighbor_distance + 1
+
         if subnet not in routing_table:
             routing_table[subnet] = [new_distance, neighbor_ip]
             updated = True
-
         else:
             current_distance, current_hop = routing_table[subnet]
 
-            # Case 2: Better path → update
             if new_distance < current_distance:
                 routing_table[subnet] = [new_distance, neighbor_ip]
                 updated = True
 
-            # Case 3: Same neighbor → update distance (important!)
             elif current_hop == neighbor_ip and new_distance != current_distance:
                 routing_table[subnet] = [new_distance, neighbor_ip]
                 updated = True
 
     if updated:
         print(f"[{MY_IP}] Routing table updated:")
-        print(f"[{MY_IP}] Current routing table:")
+
         for subnet, (dist, hop) in routing_table.items():
             print(f"  {subnet} -> dist {dist} via {hop}")
+
+            if subnet == MY_SUBNET:
+                continue
+
+            if hop != "0.0.0.0":
+                if hop.startswith("10.0.3."):
+                    cmd = f"ip route replace {subnet} via {hop} dev eth1"
+                else:
+                    cmd = f"ip route replace {subnet} via {hop} dev eth0"
+
+                print(f"[{MY_IP}] Running: {cmd}")
+                os.system(cmd)
 
 def broadcast_updates():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -91,5 +121,6 @@ def listen_for_updates():
         update_logic(neighbor_ip, routes)
 
 if __name__ == "__main__":
+    add_direct_routes()
     threading.Thread(target=broadcast_updates, daemon=True).start()
     listen_for_updates()
