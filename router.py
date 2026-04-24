@@ -61,10 +61,10 @@ def update_logic(neighbor_ip, routes_from_neighbor):
                 current_distance, current_hop, _ = routing_table[subnet]
 
                 # Accept if shorter, or refresh if same neighbor is updating us
-                if new_distance < current_distance:
+                if new_distance < current_distance or (new_distance == current_distance and current_hop != neighbor_ip):
                     routing_table[subnet] = [new_distance, neighbor_ip, time.time()]
                     updated = True
-                    print(f"[{MY_IP}] Better route: {subnet} via {neighbor_ip} dist {new_distance}")
+                    print(f"[{MY_IP}] Better/equal route: {subnet} via {neighbor_ip} dist {new_distance}")
                 elif current_hop == neighbor_ip:
                     # Refresh timestamp (and possibly updated distance from same neighbor)
                     routing_table[subnet] = [new_distance, neighbor_ip, time.time()]
@@ -73,16 +73,21 @@ def update_logic(neighbor_ip, routes_from_neighbor):
                         print(f"[{MY_IP}] Updated route: {subnet} via {neighbor_ip} dist {new_distance}")
 
     if updated:
-        apply_kernel_routes()
+        with table_lock:
+            snapshot = dict(routing_table)
+        apply_kernel_routes(snapshot)
 
-def apply_kernel_routes():
-    with table_lock:
-        for subnet, (dist, hop, _) in routing_table.items():
-            if hop == "0.0.0.0":
-                continue  # directly connected, kernel already knows
-            cmd = f"ip route replace {subnet} via {hop}"
-            print(f"[{MY_IP}] Running: {cmd}")
-            os.system(cmd)
+def apply_kernel_routes(snapshot=None):
+    if snapshot is None:
+        with table_lock:
+            snapshot = dict(routing_table)
+    local = set(get_local_subnets())
+    for subnet, (dist, hop, _) in snapshot.items():
+        if hop == "0.0.0.0" or subnet in local:
+            continue
+        cmd = f"ip route replace {subnet} via {hop}"
+        print(f"[{MY_IP}] Running: {cmd}")
+        os.system(cmd)
 
 def broadcast_updates():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -124,7 +129,7 @@ def listen_for_updates():
         try:
             data, addr = sock.recvfrom(4096)
             message = json.loads(data.decode())
-            neighbor_ip = message["router_id"]
+            neighbor_ip = addr[0]  # use actual source IP, not router_id (which may be on a different subnet)
             routes = message["routes"]
             print(f"[{MY_IP}] Received {len(routes)} routes from {neighbor_ip}")
             update_logic(neighbor_ip, routes)
@@ -132,17 +137,32 @@ def listen_for_updates():
             print(f"[{MY_IP}] Receive error: {e}")
 
 def remove_stale_routes():
-    TIMEOUT = 30  # 3x the broadcast interval
+    TIMEOUT = 15  # 3x the broadcast interval
 
     while True:
         time.sleep(5)
         now = time.time()
         to_delete = []
+        to_fix = []
 
+        local_subnets = set(get_local_subnets())
         with table_lock:
-            for subnet, (dist, hop, last_update) in routing_table.items():
+            for subnet in local_subnets:
+                if subnet not in routing_table:
+                    routing_table[subnet] = [0, "0.0.0.0", now]
+                    print(f"[{MY_IP}] Discovered new local subnet: {subnet}")
+                elif routing_table[subnet][1] != "0.0.0.0":
+                    old_hop = routing_table[subnet][1]
+                    routing_table[subnet] = [0, "0.0.0.0", now]
+                    to_fix.append((subnet, old_hop))
+
+            for subnet, (dist, hop, last_update) in list(routing_table.items()):
                 if hop == "0.0.0.0":
-                    continue  # never expire directly connected subnets
+                    # If a directly-connected subnet is no longer present, remove it
+                    if subnet not in local_subnets:
+                        print(f"[{MY_IP}] Local subnet detached: {subnet}")
+                        to_delete.append(subnet)
+                    continue
                 if now - last_update > TIMEOUT:
                     print(f"[{MY_IP}] Stale route expired: {subnet} via {hop}")
                     to_delete.append(subnet)
@@ -150,6 +170,8 @@ def remove_stale_routes():
             for subnet in to_delete:
                 del routing_table[subnet]
 
+        for subnet, old_hop in to_fix:
+            os.system(f"ip route del {subnet} via {old_hop} 2>/dev/null")
         for subnet in to_delete:
             os.system(f"ip route del {subnet} 2>/dev/null")
 
